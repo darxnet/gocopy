@@ -18,6 +18,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
+      id-token: write # for the Codecov upload in the coverage job
 
   release:
     name: Release
@@ -32,22 +33,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-
-      # The README badge reads badges/coverage.json from the "badges" branch:
-      # https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/${{ github.repository }}/badges/coverage.json
-      - name: Publish coverage badge
-        env:
-          TOTAL: ${{ needs.ci.outputs.coverage }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          color=$(awk -v t="$TOTAL" 'BEGIN { print (t >= 95) ? "brightgreen" : (t >= 80) ? "yellow" : "red" }')
-          dir=$(mktemp -d)
-          printf '{"schemaVersion": 1, "label": "coverage", "message": "%s%%", "color": "%s"}\n' "$TOTAL" "$color" > "$dir/coverage.json"
-          cd "$dir"
-          git init -q -b badges
-          git -c user.name=github-actions -c user.email=github-actions@github.com add coverage.json
-          git -c user.name=github-actions -c user.email=github-actions@github.com commit -q -m "coverage $TOTAL%"
-          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges:badges
 
       - name: Install svu
         run: go install github.com/caarlos0/svu/v2@latest

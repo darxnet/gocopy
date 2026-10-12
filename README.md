@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/darxnet/gocopy.svg)](https://pkg.go.dev/github.com/darxnet/gocopy)
 [![Go](https://github.com/darxnet/gocopy/actions/workflows/release.yml/badge.svg)](https://github.com/darxnet/gocopy/actions/workflows/release.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/darxnet/gocopy/badges/coverage.json)](https://github.com/darxnet/gocopy/actions/workflows/release.yml)
+[![Coverage](https://codecov.io/gh/darxnet/gocopy/graph/badge.svg)](https://codecov.io/gh/darxnet/gocopy)
 
 `gocopy` generates `CopyFrom(src)` and `Copy()` methods that make a struct
 value an independent copy of another — without allocating what the
