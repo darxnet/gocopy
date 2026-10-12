@@ -113,8 +113,14 @@ for tools that want the source without the file.
   `src`. That is usually right for references to long-lived objects; for
   an owned object, give its type a `CopyFrom`.
 
-See also [goreset](https://github.com/darxnet/goreset), which generates
-`Reset()` for the same kind of structs.
+## See also
+
+The sibling modules follow the same rule — nothing allocated on the hot path,
+the zero value ready to use:
+
+- [goshard](https://github.com/darxnet/goshard) — sharded, lock-based concurrent map for high-churn data: stores allocate nothing
+- [gosync](https://github.com/darxnet/gosync) — generic concurrent map with `sync.Map` semantics and no interface boxing, for read-mostly data
+- [goreset](https://github.com/darxnet/goreset) — generates `Reset()` for pooled structs: back to the zero state, memory kept
 
 ## License
 
