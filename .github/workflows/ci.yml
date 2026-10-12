@@ -1,0 +1,128 @@
+name: CI
+
+# Runs on pull requests and on branches other than main; release.yml calls it
+# for main, so every commit is tested the same way before it is released.
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+  workflow_call:
+    outputs:
+      coverage:
+        description: Total statement coverage in percent
+        value: ${{ jobs.coverage.outputs.total }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test (Go ${{ matrix.go }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        go: ['1.24', '1.25', '1.26']
+        include:
+          - os: macos-latest # arm64
+            go: '1.26'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Verify go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -failfast -count=1 ./...
+
+      - name: Benchmarks compile and run once
+        run: go test -run=NONE -bench=. -benchtime=1x ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+
+  vulncheck:
+    name: Vulnerability check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: true
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    outputs:
+      total: ${{ steps.total.outputs.total }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Test with coverage
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Verify coverage
+        id: total
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
+          echo "Total coverage: $total%"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          if awk "BEGIN { exit !($total < 90) }"; then
+            echo "Coverage is below 90%"
+            exit 1
+          fi
+
+  # One check to require in branch protection, instead of every matrix cell.
+  ok:
+    name: CI passed
+    if: always()
+    needs: [test, lint, vulncheck, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = "success" ] || exit 1
+          done
