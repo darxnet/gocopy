@@ -2,11 +2,10 @@ name: CI
 
 # Runs on pull requests and on branches other than main; release.yml calls it
 # for main, so every commit is tested the same way before it is released.
+# main accepts only pull requests (ruleset), so CI runs once per PR update
+# and once on main via release.yml; a push trigger would run it twice.
 on:
   pull_request:
-  push:
-    branches-ignore:
-      - main
   workflow_call:
     outputs:
       coverage:
