@@ -28,7 +28,7 @@ changes meaning): users regenerate and review the diff.
     go test -race -count=1 ./...
     golangci-lint run ./...                # .golangci.yml, `default: all`
 
-CI runs the same checks on Go 1.24 through the latest release, on Linux and macOS,
+CI runs the same checks on the stable and oldstable Go releases, on Linux (amd64) and macOS (arm64),
 plus `govulncheck` and a coverage gate.
 
 ## Ground rules
