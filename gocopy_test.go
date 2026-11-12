@@ -2,8 +2,11 @@ package gocopy_test
 
 import (
 	"bytes"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -224,5 +227,123 @@ func TestFileName(t *testing.T) {
 
 	if got := gocopy.FileName("LoadVars"); got != "loadvars_copy.gen.go" {
 		t.Fatalf("FileName = %q", got)
+	}
+}
+
+// checkGenerated writes a throwaway module, generates the CopyFrom of each
+// type in typeNames in its root package and runs go vet and go test on the
+// result: the generated code must compile, pass vet and the module's own
+// tests. It returns the generated sources by type name.
+func checkGenerated(t *testing.T, name string, files map[string]string, typeNames ...string) map[string]string {
+	t.Helper()
+
+	dir := writeModule(t, name, files)
+
+	pkg, err := gocopy.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gen := make(map[string]string, len(typeNames))
+
+	for _, typeName := range typeNames {
+		src, err := pkg.Generate(typeName)
+		if err != nil {
+			t.Fatalf("Generate(%s): %v", typeName, err)
+		}
+
+		gen[typeName] = string(src)
+
+		if err := os.WriteFile(filepath.Join(dir, gocopy.FileName(typeName)), src, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, args := range [][]string{{"vet", "./..."}, {"test", "-count=1", "./..."}} {
+		cmd := exec.Command("go", args...)
+		cmd.Dir = dir
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("go %s: %v\n%s\n%s", strings.Join(args, " "), err, out, strings.Join(slices.Collect(maps.Values(gen)), "\n"))
+		}
+	}
+
+	return gen
+}
+
+// TestGenerateImports checks that every package a field's type names is
+// imported, and that two packages with the same name get distinct names.
+func TestGenerateImports(t *testing.T) {
+	t.Parallel()
+
+	gen := checkGenerated(t, "imports", map[string]string{
+		"a/a.go":     "package a\n\ntype K string\n",
+		"b/b.go":     "package b\n\ntype V int\n",
+		"x/v1/v1.go": "package v1\n\ntype T int\n",
+		"y/v1/v1.go": "package v1\n\ntype U int\n",
+		"box/box.go": "package box\n\ntype Box[T any] struct{ X T }\n\n" +
+			"func (dst *Box[T]) CopyFrom(src *Box[T]) { *dst = *src }\n",
+		"root.go": `package root
+
+import (
+	"example.com/imports/a"
+	"example.com/imports/b"
+	"example.com/imports/box"
+	xv1 "example.com/imports/x/v1"
+	yv1 "example.com/imports/y/v1"
+)
+
+// v1 takes the name, so neither package may be imported as v1
+var v1 = 1
+
+type T struct {
+	AB  map[a.K]b.V
+	V1  map[xv1.T]yv1.U
+	Box *box.Box[a.K]
+}
+`,
+		"root_test.go": `package root
+
+import (
+	"testing"
+
+	"example.com/imports/a"
+	"example.com/imports/b"
+	"example.com/imports/box"
+)
+
+func TestCopy(t *testing.T) {
+	src := T{AB: map[a.K]b.V{"k": 1}, Box: &box.Box[a.K]{X: "x"}}
+	dst := src.Copy()
+
+	if dst.AB["k"] != 1 || dst.Box == src.Box || dst.Box.X != "x" || v1 != 1 {
+		t.Fatalf("dst = %+v", dst)
+	}
+}
+`,
+	}, "T")
+
+	for _, want := range []string{
+		`v1_2 "example.com/imports/x/v1"`,
+		`v1_3 "example.com/imports/y/v1"`,
+		"make(map[v1_2.T]v1_3.U, len(src.V1))",
+		"new(box.Box[a.K])",
+	} {
+		if !strings.Contains(gen["T"], want) {
+			t.Errorf("generated code lacks %q:\n%s", want, gen["T"])
+		}
+	}
+}
+
+func TestIsLocalName(t *testing.T) {
+	t.Parallel()
+
+	for name, want := range map[string]bool{
+		"dst": true, "src": true, "keepData": true, "i": true, "k": true, "v_2": true, "w_10": true,
+		"v1": false, "v_": false, "v_x": false, "vv": false, "a": false, "kv": false,
+	} {
+		if got := gocopy.IsLocalName(name); got != want {
+			t.Errorf("isLocalName(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

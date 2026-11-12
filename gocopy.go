@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/format"
 	"go/types"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -21,7 +22,6 @@ func FileName(typeName string) string {
 // Keep saves dst's own value before the bulk copy, Copy fills it from src after.
 type deepField struct {
 	Field  string
-	Import string
 	Keep   string // bulk mode: save dst's own value before `*dst = *src`
 	Copy   string // bulk mode: fill from src after, using the kept value
 	Direct string // field-wise mode: the same, straight on dst
@@ -42,10 +42,11 @@ func (p *Package) Generate(typeName string) ([]byte, error) {
 	}
 
 	var (
-		imports []string
-		fields  []deepField
-		plain   []deepField // field-wise mode: every field that is simply assigned
+		fields []deepField
+		plain  []deepField // field-wise mode: every field that is simply assigned
 	)
+
+	g := &generator{p: p, imports: make(map[string]goImport), names: make(map[string]bool)}
 
 	// A struct with a lock or an atomic inside (even nested) cannot be copied
 	// with `*dst = *src` (go vet copylocks): then every field is copied on its own.
@@ -60,7 +61,7 @@ func (p *Package) Generate(typeName string) ([]byte, error) {
 				"tag it copy:\"-\" (keep dst's) or copy:\"shallow\" (copy anyway)", typeName, f.Name())
 		}
 
-		d, deep, err := p.deepCode(f, tag)
+		d, deep, err := g.deepCode(f, tag)
 		if err != nil {
 			return nil, fmt.Errorf("gocopy: field %s.%s: %w", typeName, f.Name(), err)
 		}
@@ -76,27 +77,19 @@ func (p *Package) Generate(typeName string) ([]byte, error) {
 		}
 	}
 
-	for _, f := range fields {
-		if f.Import != "" {
-			imports = append(imports, f.Import)
-		}
-	}
-
-	imports = slices.Compact(slices.Sorted(slices.Values(imports)))
-
 	data := struct {
 		PackageName string
 		TypeName    string
 		Fields      []deepField
 		Plain       []deepField
-		Imports     []string
+		Imports     []goImport
 		Bulk        bool
 	}{
 		PackageName: p.pkg.Name(),
 		TypeName:    typeName,
 		Fields:      fields,
 		Plain:       plain,
-		Imports:     imports,
+		Imports:     g.importList(),
 		Bulk:        bulk,
 	}
 
@@ -117,7 +110,7 @@ var errArrayOfMaps = errors.New("an array of maps: tag it copy:\"-\" or copy:\"s
 
 // deepCode describes how f is copied; deep is false for a field the bulk
 // assignment copies correctly on its own.
-func (p *Package) deepCode(f *types.Var, tag string) (d deepField, deep bool, err error) {
+func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, err error) {
 	name := f.Name()
 	d = deepField{Field: name}
 
@@ -144,7 +137,7 @@ func (p *Package) deepCode(f *types.Var, tag string) (d deepField, deep bool, er
 		return d, true, nil
 
 	case *types.Map:
-		typeName := p.typeName(f.Type(), &d.Import)
+		typeName := g.typeName(f.Type())
 		d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
 		d.Direct = fmt.Sprintf(`clear(dst.%[1]s)
 	if src.%[1]s != nil {
@@ -182,7 +175,7 @@ func (p *Package) deepCode(f *types.Var, tag string) (d deepField, deep bool, er
 			dst.%[1]s = new(%[2]s)
 		}
 		dst.%[1]s.CopyFrom(src.%[1]s)
-	}`, name, p.typeName(ut.Elem(), &d.Import))
+	}`, name, g.typeName(ut.Elem()))
 			d.Copy = fmt.Sprintf("dst.%[1]s = keep%[1]s\n\t%[2]s", name, d.Direct)
 
 			return d, true, nil
@@ -227,17 +220,90 @@ func arrayCode(name string, ut *types.Array) (deepField, bool, error) {
 	}
 }
 
-// typeName returns the name of t as seen from the package, recording the import it needs.
-func (p *Package) typeName(t types.Type, importPath *string) string {
-	return types.TypeString(t, func(other *types.Package) string {
-		if p.pkg == other {
-			return ""
+// generator holds the state of one generated file: the imports its code needs.
+type generator struct {
+	p       *Package
+	imports map[string]goImport // by path
+	names   map[string]bool     // the names the imports take
+}
+
+// goImport is one import of the generated file; Name is set when it differs
+// from the package's own name.
+type goImport struct {
+	Name, Path string
+}
+
+// typeName returns the name of t as seen from the generated file, importing
+// every package it refers to.
+func (g *generator) typeName(t types.Type) string {
+	return types.TypeString(t, g.qualifier)
+}
+
+// qualifier is the types.Qualifier of the generated file: a package gets its
+// own name unless that is taken by another import, a declaration of the
+// package, a predeclared identifier or a local variable of the generated code.
+func (g *generator) qualifier(other *types.Package) string {
+	if other == g.p.pkg {
+		return ""
+	}
+
+	if imp, ok := g.imports[other.Path()]; ok {
+		if imp.Name != "" {
+			return imp.Name
 		}
 
-		*importPath = other.Path()
-
 		return other.Name()
-	})
+	}
+
+	name := other.Name()
+	for n := 2; g.taken(name); n++ {
+		name = fmt.Sprintf("%s_%d", other.Name(), n)
+	}
+
+	imp := goImport{Path: other.Path()}
+	if name != other.Name() {
+		imp.Name = name
+	}
+
+	g.imports[other.Path()] = imp
+	g.names[name] = true
+
+	return name
+}
+
+func (g *generator) taken(name string) bool {
+	return g.names[name] || g.p.pkg.Scope().Lookup(name) != nil || types.Universe.Lookup(name) != nil ||
+		isLocalName(name)
+}
+
+// isLocalName reports whether name may be a variable of the generated code:
+// dst, src, keep<Field>, or a loop variable i, k, v, w (with a _<depth> suffix
+// when nested).
+func isLocalName(name string) bool {
+	if name == "dst" || name == "src" || strings.HasPrefix(name, "keep") {
+		return true
+	}
+
+	if !strings.Contains("ikvw", name[:1]) {
+		return false
+	}
+
+	rest, ok := strings.CutPrefix(name[1:], "_")
+	if !ok {
+		return rest == ""
+	}
+
+	return rest != "" && strings.Trim(rest, "0123456789") == ""
+}
+
+// importList returns the imports of the generated file, sorted by path.
+func (g *generator) importList() []goImport {
+	list := make([]goImport, 0, len(g.imports))
+	for _, path := range slices.Sorted(maps.Keys(g.imports)) {
+		list = append(list, g.imports[path])
+	}
+
+	return list
 }
 
 // isLockType reports whether t is a sync or atomic type, or a struct holding one.
@@ -289,7 +355,7 @@ package {{.PackageName}}
 
 import (
 {{- range .Imports}}
-	"{{.}}"
+	{{with .Name}}{{.}} {{end}}"{{.Path}}"
 {{- end}}
 )
 {{- end}}
