@@ -136,8 +136,8 @@ func TestRunIdempotent(t *testing.T) {
 		"c.go": `package c
 
 type Request struct {
-	Inner Inner
-	Ptr   *Inner
+	In  Inner
+	Ptr *Inner
 }
 
 type Inner struct{ B []byte }
@@ -152,11 +152,11 @@ type Node struct {
 import "testing"
 
 func TestCopy(t *testing.T) {
-	src := Request{Inner: Inner{B: []byte("a")}, Ptr: &Inner{B: []byte("b")}}
+	src := Request{In: Inner{B: []byte("a")}, Ptr: &Inner{B: []byte("b")}}
 	dst := src.Copy()
-	src.Inner.B[0], src.Ptr.B[0] = 'X', 'X'
+	src.In.B[0], src.Ptr.B[0] = 'X', 'X'
 
-	if string(dst.Inner.B) != "a" || string(dst.Ptr.B) != "b" {
+	if string(dst.In.B) != "a" || string(dst.Ptr.B) != "b" {
 		t.Fatalf("dst = %+v", dst)
 	}
 

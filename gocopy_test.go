@@ -260,11 +260,12 @@ func checkGenerated(t *testing.T, name string, files map[string]string, typeName
 	}
 
 	for _, args := range [][]string{{"vet", "./..."}, {"test", "-count=1", "./..."}} {
-		cmd := exec.Command("go", args...)
+		cmd := exec.Command("go", args...) //nolint:gosec // fixed arguments
 		cmd.Dir = dir
 
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("go %s: %v\n%s\n%s", strings.Join(args, " "), err, out, strings.Join(slices.Collect(maps.Values(gen)), "\n"))
+			t.Fatalf("go %s: %v\n%s\n%s", strings.Join(args, " "), err, out,
+				strings.Join(slices.Collect(maps.Values(gen)), "\n"))
 		}
 	}
 
@@ -376,22 +377,22 @@ type Value struct{ N int }
 func (dst *Value) CopyFrom(src Value) { dst.N = src.N }
 
 type T struct {
-	Outer    Outer
-	OuterPtr *Outer
-	Other    Other
-	Value    Value
-	Inner    Inner
+	O  Outer
+	OP *Outer
+	Ot Other
+	V  Value
+	In Inner
 }
 `,
 	}, "T")
 
-	for _, field := range []string{"Outer", "OuterPtr", "Other", "Value"} {
+	for _, field := range []string{"O", "OP", "Ot", "V"} {
 		if strings.Contains(gen["T"], "dst."+field+".CopyFrom") {
-			t.Errorf("%s has no CopyFrom(*%s):\n%s", field, field, gen["T"])
+			t.Errorf("field %s has no CopyFrom of its own type:\n%s", field, gen["T"])
 		}
 	}
 
-	if !strings.Contains(gen["T"], "dst.Inner.CopyFrom(&src.Inner)") {
+	if !strings.Contains(gen["T"], "dst.In.CopyFrom(&src.In)") {
 		t.Errorf("Inner's CopyFrom is not called:\n%s", gen["T"])
 	}
 }
@@ -572,7 +573,7 @@ type T struct {
 	AM     [2]map[string]int
 	SM     []map[string]int
 	MM     map[string]map[string]int
-	Matrix Matrix
+	Mx     Matrix
 	Plain  [2][2]int
 }
 
@@ -600,7 +601,7 @@ func source() *T {
 		AM:     [2]map[string]int{{"k": 1}},
 		SM:     []map[string]int{{"k": 1}},
 		MM:     map[string]map[string]int{"k": {"k": 1}},
-		Matrix: Matrix{{1}},
+		Mx:     Matrix{{1}},
 		Plain:  [2][2]int{{1}},
 	}
 }
@@ -616,7 +617,7 @@ func mutate(t *T) {
 	t.AM[0]["k"] = 9
 	t.SM[0]["k"] = 9
 	t.MM["k"]["k"] = 9
-	t.Matrix[0][0] = 9
+	t.Mx[0][0] = 9
 }
 
 func TestCopy(t *testing.T) {

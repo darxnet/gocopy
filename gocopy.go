@@ -173,6 +173,15 @@ func (p *Package) generate(typeName string, pending map[*types.TypeName]bool) ([
 	return src, nil
 }
 
+// generator holds the state of one generated file: the imports its code needs.
+type generator struct {
+	p       *Package
+	pending map[*types.TypeName]bool // the types generated in this run
+	copying map[string]bool          // the slice and map types being copied, against recursion
+	imports map[string]goImport      // by path
+	names   map[string]bool          // the names the imports take
+}
+
 // deepCode describes how f is copied; deep is false for a field the bulk
 // assignment copies correctly on its own.
 func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, err error) {
@@ -341,15 +350,6 @@ func loopVar(name string, depth int) string {
 	return fmt.Sprintf("%s_%d", name, depth)
 }
 
-// generator holds the state of one generated file: the imports its code needs.
-type generator struct {
-	p       *Package
-	pending map[*types.TypeName]bool // the types generated in this run
-	copying map[string]bool          // the slice and map types being copied, against recursion
-	imports map[string]goImport      // by path
-	names   map[string]bool          // the names the imports take
-}
-
 // goImport is one import of the generated file; Name is set when it differs
 // from the package's own name.
 type goImport struct {
@@ -407,7 +407,7 @@ func isLocalName(name string) bool {
 		return true
 	}
 
-	if !strings.Contains("ikvw", name[:1]) {
+	if !strings.ContainsAny(name[:1], "ikvw") {
 		return false
 	}
 
