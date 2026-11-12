@@ -659,3 +659,71 @@ func TestCopy(t *testing.T) {
 		t.Errorf("an array of numbers needs no code:\n%s", gen["T"])
 	}
 }
+
+// TestGenerateNilSlices checks the nil-ness of copied slices: a non-nil src
+// gives a non-nil dst, even when empty; a nil src empties dst, which keeps its
+// array; so Copy, starting from a zero dst, keeps nil and empty apart.
+func TestGenerateNilSlices(t *testing.T) {
+	t.Parallel()
+
+	checkGenerated(t, "nilslices", map[string]string{
+		"root.go": `package root
+
+import "sync"
+
+type T struct {
+	B  []byte
+	BB [][]byte
+	A  [1][]byte
+	M  map[string][]int
+}
+
+type Locked struct {
+	Mu sync.Mutex ` + "`copy:\"-\"`" + `
+	B  []byte
+}
+`,
+		"root_test.go": `package root
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestNil(t *testing.T) {
+	empty := T{B: []byte{}, BB: [][]byte{{}}, A: [1][]byte{{}}, M: map[string][]int{"k": {}}}
+	cp := empty.Copy()
+
+	if cp.B == nil || cp.BB == nil || cp.BB[0] == nil || cp.A[0] == nil || cp.M["k"] == nil {
+		t.Fatalf("an empty src gave nil: %#v", cp)
+	}
+
+	got, _ := json.Marshal(&cp)
+	want, _ := json.Marshal(&empty)
+
+	if string(got) != string(want) {
+		t.Fatalf("Copy marshals to %s, want %s", got, want)
+	}
+
+	var zero T
+	if cp := zero.Copy(); cp.B != nil || cp.BB != nil || cp.A[0] != nil {
+		t.Fatalf("a nil src gave non-nil: %#v", cp)
+	}
+
+	dst := T{B: make([]byte, 1, 8), BB: make([][]byte, 1, 8)}
+	dst.CopyFrom(&zero)
+
+	if len(dst.B) != 0 || cap(dst.B) != 8 || len(dst.BB) != 0 || cap(dst.BB) != 8 {
+		t.Fatalf("a nil src must empty dst and keep its arrays: %#v", dst)
+	}
+
+	var l Locked
+	l.CopyFrom(&Locked{B: []byte{}})
+
+	if l.B == nil {
+		t.Fatal("an empty src gave nil")
+	}
+}
+`,
+	}, "T", "Locked")
+}

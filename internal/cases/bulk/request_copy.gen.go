@@ -21,7 +21,13 @@ func (dst *Request) CopyFrom(src *Request) {
 
 	*dst = *src
 	dst.Data = append(keepData, src.Data...)
+	if dst.Data == nil && src.Data != nil {
+		dst.Data = make([]byte, 0)
+	}
 	dst.Names = append(keepNames, src.Names...)
+	if dst.Names == nil && src.Names != nil {
+		dst.Names = make([]string, 0)
+	}
 	dst.M = keepM
 	clear(dst.M)
 	if src.M != nil {
@@ -56,6 +62,9 @@ func (dst *Request) CopyFrom(src *Request) {
 	dst.Arr = keepArr
 	for i := range src.Arr {
 		dst.Arr[i] = append(dst.Arr[i][:0], src.Arr[i]...)
+		if dst.Arr[i] == nil && src.Arr[i] != nil {
+			dst.Arr[i] = make([]byte, 0)
+		}
 	}
 	dst.Inners = keepInners
 	for i := range src.Inners {

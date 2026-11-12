@@ -204,7 +204,8 @@ func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, 
 	if s, ok := f.Type().Underlying().(*types.Slice); ok && g.plain(s.Elem()) {
 		// the slice is all there is to copy: keep its emptied array
 		d.Keep = fmt.Sprintf("keep%s := dst.%s[:0]", name, name)
-		d.Copy = fmt.Sprintf("dst.%s = append(keep%s, src.%s...)", name, name, name)
+		d.Copy = fmt.Sprintf("dst.%[1]s = append(keep%[1]s, src.%[1]s...)\n%[2]s",
+			name, nonNil("dst."+name, "src."+name, g.typeName(f.Type())))
 	}
 
 	return d, true, nil
@@ -284,11 +285,11 @@ func (g *generator) sliceCode(dst, src string, t types.Type, ut *types.Slice, de
 	}
 
 	if code == "" {
-		return fmt.Sprintf("%[1]s = append(%[1]s[:0], %[2]s...)", dst, src), nil
+		return fmt.Sprintf("%[1]s = append(%[1]s[:0], %[2]s...)\n%[3]s", dst, src, nonNil(dst, src, g.typeName(t))), nil
 	}
 
 	// dst's elements, up to its capacity, are its own: copy into them
-	return fmt.Sprintf(`if cap(%[1]s) < len(%[2]s) {
+	return fmt.Sprintf(`if cap(%[1]s) < len(%[2]s) || %[1]s == nil && %[2]s != nil {
 	%[1]s = make(%[3]s, len(%[2]s))
 } else {
 	%[1]s = %[1]s[:len(%[2]s)]
@@ -321,6 +322,14 @@ if %[2]s != nil {
 		%[6]s
 	}
 }`, dst, src, g.typeName(t), k, v, put), nil
+}
+
+// nonNil returns the statement that makes the slice dst, after an append of
+// src's elements, non-nil when src is: an empty src must not come out nil.
+func nonNil(dst, src, typeName string) string {
+	return fmt.Sprintf(`if %[1]s == nil && %[2]s != nil {
+	%[1]s = make(%[3]s, 0)
+}`, dst, src, typeName)
 }
 
 // loopVar is the name of a variable of the generated code at depth: i, i_1, i_2...

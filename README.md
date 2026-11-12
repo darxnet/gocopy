@@ -27,6 +27,9 @@ func (dst *Request) CopyFrom(src *Request) {
 
 	*dst = *src
 	dst.Data = append(keepData, src.Data...)
+	if dst.Data == nil && src.Data != nil {
+		dst.Data = make([]byte, 0)
+	}
 	dst.Inner = keepInner
 	dst.Inner.CopyFrom(&src.Inner)
 }
@@ -44,7 +47,7 @@ A `CopyFrom` into a pooled, already-sized `dst` allocates nothing.
 
 | Field | Copy |
 |---|---|
-| slice | `append(dst.F[:0], src.F...)` — into dst's own array |
+| slice | `append(dst.F[:0], src.F...)` — into dst's own array (nil only when src is nil and dst was: see below) |
 | map | entry by entry into dst's own map (`clear` first; a nil dst map is made, a nil src leaves dst empty) |
 | struct with `CopyFrom(*T)` | `dst.F.CopyFrom(&src.F)` |
 | pointer to struct with `CopyFrom(*T)` | into dst's own object; a nil dst gets a new one, a nil src gives nil |
@@ -53,6 +56,12 @@ A `CopyFrom` into a pooled, already-sized `dst` allocates nothing.
 | map of slices, maps, structs with `CopyFrom` or pointers to them | each value a new copy (dst's old values are dropped with `clear`) |
 | everything else (numbers, strings, pointers, interfaces, chans, funcs, plain structs) | assigned as it is |
 | a type parameter `T` of a generic struct | assigned as it is, whatever the type argument (`Box[[]byte]` shares it) |
+
+A non-nil src slice or map gives a non-nil dst one, even when empty, so
+`[]` stays `[]` in JSON. A nil src slice or map empties dst's but leaves it
+non-nil when it was — dst keeps its memory for the next copy — so after
+`CopyFrom` a nil and an empty one are not told apart; `Copy` starts from a
+zero dst and keeps them apart.
 
 The rules apply at any depth: `[][]byte`, `map[string][]Inner` and
 `[2][3][]byte` share nothing with src. A type that contains itself through
