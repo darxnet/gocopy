@@ -347,3 +347,51 @@ func TestIsLocalName(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateCopyFromSignature checks that only CopyFrom(*T) counts as T's
+// CopyFrom: one promoted from an embedded type, or taking another type, is
+// not called.
+func TestGenerateCopyFromSignature(t *testing.T) {
+	t.Parallel()
+
+	gen := checkGenerated(t, "signature", map[string]string{
+		"root.go": `package root
+
+type Inner struct{ B []byte }
+
+func (dst *Inner) CopyFrom(src *Inner) { dst.B = append(dst.B[:0], src.B...) }
+
+// Outer gets Inner's CopyFrom(*Inner) by embedding
+type Outer struct {
+	Inner
+	N int
+}
+
+type Other struct{ N int }
+
+func (dst *Other) CopyFrom(src *Inner) { dst.N = len(src.B) }
+
+type Value struct{ N int }
+
+func (dst *Value) CopyFrom(src Value) { dst.N = src.N }
+
+type T struct {
+	Outer    Outer
+	OuterPtr *Outer
+	Other    Other
+	Value    Value
+	Inner    Inner
+}
+`,
+	}, "T")
+
+	for _, field := range []string{"Outer", "OuterPtr", "Other", "Value"} {
+		if strings.Contains(gen["T"], "dst."+field+".CopyFrom") {
+			t.Errorf("%s has no CopyFrom(*%s):\n%s", field, field, gen["T"])
+		}
+	}
+
+	if !strings.Contains(gen["T"], "dst.Inner.CopyFrom(&src.Inner)") {
+		t.Errorf("Inner's CopyFrom is not called:\n%s", gen["T"])
+	}
+}
