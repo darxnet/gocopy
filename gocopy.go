@@ -2,7 +2,6 @@ package gocopy
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"go/format"
 	"go/token"
@@ -86,7 +85,13 @@ func (p *Package) generate(typeName string, pending map[*types.TypeName]bool) ([
 		plain  []deepField // field-wise mode: every field that is simply assigned
 	)
 
-	g := &generator{p: p, pending: pending, imports: make(map[string]goImport), names: make(map[string]bool)}
+	g := &generator{
+		p:       p,
+		pending: pending,
+		copying: make(map[string]bool),
+		imports: make(map[string]goImport),
+		names:   make(map[string]bool),
+	}
 
 	// a generic type's methods name its type parameters in the receiver
 	recv, lockCheck := typeName, obj.Type()
@@ -168,8 +173,6 @@ func (p *Package) generate(typeName string, pending map[*types.TypeName]bool) ([
 	return src, nil
 }
 
-var errArrayOfMaps = errors.New("an array of maps: tag it copy:\"-\" or copy:\"shallow\"")
-
 // deepCode describes how f is copied; deep is false for a field the bulk
 // assignment copies correctly on its own.
 func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, err error) {
@@ -189,105 +192,153 @@ func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, 
 		return d, false, nil
 	}
 
-	switch ut := f.Type().Underlying().(type) {
-	case *types.Slice:
-		// nil src with nil dst stays nil
+	code, err := g.copyCode("dst."+name, "src."+name, f.Type(), 0)
+	if err != nil || code == "" {
+		return d, false, err
+	}
+
+	d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
+	d.Copy = fmt.Sprintf("dst.%s = keep%s\n%s", name, name, code)
+	d.Direct = code
+
+	if s, ok := f.Type().Underlying().(*types.Slice); ok && g.plain(s.Elem()) {
+		// the slice is all there is to copy: keep its emptied array
 		d.Keep = fmt.Sprintf("keep%s := dst.%s[:0]", name, name)
 		d.Copy = fmt.Sprintf("dst.%s = append(keep%s, src.%s...)", name, name, name)
-		d.Direct = fmt.Sprintf("dst.%s = append(dst.%s[:0], src.%s...)", name, name, name)
+	}
 
-		return d, true, nil
+	return d, true, nil
+}
+
+// plain reports whether a value of type t is copied by assignment.
+func (g *generator) plain(t types.Type) bool {
+	code, _ := g.copyCode("dst", "src", t, 0)
+
+	return code == ""
+}
+
+// copyCode returns the statements that make dst an independent copy of src,
+// two addressable expressions of type t, reusing the memory dst owns; ""
+// when `dst = src` is one already. depth names the loop variables.
+func (g *generator) copyCode(dst, src string, t types.Type, depth int) (string, error) {
+	switch ut := t.Underlying().(type) {
+	case *types.Slice:
+		return g.nested(t, func() (string, error) { return g.sliceCode(dst, src, t, ut, depth) })
 
 	case *types.Map:
-		typeName := g.typeName(f.Type())
-		d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
-		d.Direct = fmt.Sprintf(`clear(dst.%[1]s)
-	if src.%[1]s != nil {
-		if dst.%[1]s == nil {
-			dst.%[1]s = make(%[2]s, len(src.%[1]s))
-		}
-		for k, v := range src.%[1]s {
-			dst.%[1]s[k] = v
-		}
-	}`, name, typeName)
-		d.Copy = fmt.Sprintf("dst.%[1]s = keep%[1]s\n\t%[2]s", name, d.Direct)
-
-		return d, true, nil
-
-	case *types.Struct:
-		if g.hasCopyFrom(f.Type()) {
-			d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
-			d.Copy = fmt.Sprintf("dst.%s = keep%s\n\tdst.%s.CopyFrom(&src.%s)", name, name, name, name)
-			d.Direct = fmt.Sprintf("dst.%s.CopyFrom(&src.%s)", name, name)
-
-			return d, true, nil
-		}
+		return g.nested(t, func() (string, error) { return g.mapCode(dst, src, t, ut, depth) })
 
 	case *types.Array:
-		return g.arrayCode(name, ut)
+		i := loopVar("i", depth)
+
+		code, err := g.copyCode(dst+"["+i+"]", src+"["+i+"]", ut.Elem(), depth+1)
+		if err != nil || code == "" {
+			return "", err
+		}
+
+		return fmt.Sprintf("for %s := range %s {\n%s\n}", i, src, code), nil
+
+	case *types.Struct:
+		if g.hasCopyFrom(t) {
+			return fmt.Sprintf("%s.CopyFrom(&%s)", dst, src), nil
+		}
 
 	case *types.Pointer:
 		if _, ok := ut.Elem().Underlying().(*types.Struct); ok && g.hasCopyFrom(ut.Elem()) {
 			// dst keeps its own object and copies into it; a nil dst gets a new one
-			d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
-			d.Direct = fmt.Sprintf(`if src.%[1]s == nil {
-		dst.%[1]s = nil
-	} else {
-		if dst.%[1]s == nil {
-			dst.%[1]s = new(%[2]s)
-		}
-		dst.%[1]s.CopyFrom(src.%[1]s)
-	}`, name, g.typeName(ut.Elem()))
-			d.Copy = fmt.Sprintf("dst.%[1]s = keep%[1]s\n\t%[2]s", name, d.Direct)
-
-			return d, true, nil
+			return fmt.Sprintf(`if %[2]s == nil {
+	%[1]s = nil
+} else {
+	if %[1]s == nil {
+		%[1]s = new(%[3]s)
+	}
+	%[1]s.CopyFrom(%[2]s)
+}`, dst, src, g.typeName(ut.Elem())), nil
 		}
 	}
 
-	return d, false, nil
+	return "", nil
 }
 
-func (g *generator) arrayCode(name string, ut *types.Array) (deepField, bool, error) {
-	d := deepField{Field: name}
-
-	switch ut.Elem().Underlying().(type) {
-	case *types.Slice:
-		// an array of slices would share every element's memory; copy element-wise
-		d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
-		d.Direct = fmt.Sprintf(`for i := range src.%[1]s {
-		dst.%[1]s[i] = append(dst.%[1]s[i][:0], src.%[1]s[i]...)
-	}`, name)
-		d.Copy = fmt.Sprintf("dst.%[1]s = keep%[1]s\n\t%[2]s", name, d.Direct)
-
-		return d, true, nil
-
-	case *types.Struct:
-		if !g.hasCopyFrom(ut.Elem()) {
-			return d, false, nil
-		}
-
-		d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
-		d.Direct = fmt.Sprintf(`for i := range src.%[1]s {
-		dst.%[1]s[i].CopyFrom(&src.%[1]s[i])
-	}`, name)
-		d.Copy = fmt.Sprintf("dst.%[1]s = keep%[1]s\n\t%[2]s", name, d.Direct)
-
-		return d, true, nil
-
-	case *types.Map:
-		return d, false, errArrayOfMaps
-
-	default:
-		return d, false, nil
+// nested runs code for the slice or map type t, failing when t contains
+// itself (type L []L): its copy would never end.
+func (g *generator) nested(t types.Type, code func() (string, error)) (string, error) {
+	key := t.String()
+	if g.copying[key] {
+		return "", fmt.Errorf("type %s contains itself: tag the field copy:\"-\" or copy:\"shallow\"",
+			types.TypeString(t, types.RelativeTo(g.p.pkg)))
 	}
+
+	g.copying[key] = true
+	defer delete(g.copying, key)
+
+	return code()
+}
+
+func (g *generator) sliceCode(dst, src string, t types.Type, ut *types.Slice, depth int) (string, error) {
+	i := loopVar("i", depth)
+
+	code, err := g.copyCode(dst+"["+i+"]", src+"["+i+"]", ut.Elem(), depth+1)
+	if err != nil {
+		return "", err
+	}
+
+	if code == "" {
+		return fmt.Sprintf("%[1]s = append(%[1]s[:0], %[2]s...)", dst, src), nil
+	}
+
+	// dst's elements, up to its capacity, are its own: copy into them
+	return fmt.Sprintf(`if cap(%[1]s) < len(%[2]s) {
+	%[1]s = make(%[3]s, len(%[2]s))
+} else {
+	%[1]s = %[1]s[:len(%[2]s)]
+}
+for %[4]s := range %[2]s {
+%[5]s
+}`, dst, src, g.typeName(t), i, code), nil
+}
+
+func (g *generator) mapCode(dst, src string, t types.Type, ut *types.Map, depth int) (string, error) {
+	k, v, w := loopVar("k", depth), loopVar("v", depth), loopVar("w", depth)
+
+	code, err := g.copyCode(w, v, ut.Elem(), depth+1)
+	if err != nil {
+		return "", err
+	}
+
+	put := fmt.Sprintf("%s[%s] = %s", dst, k, v)
+	if code != "" {
+		// a value is a fresh copy: dst's old values are gone with clear
+		put = fmt.Sprintf("var %[1]s %[2]s\n%[3]s\n%[4]s[%[5]s] = %[1]s", w, g.typeName(ut.Elem()), code, dst, k)
+	}
+
+	return fmt.Sprintf(`clear(%[1]s)
+if %[2]s != nil {
+	if %[1]s == nil {
+		%[1]s = make(%[3]s, len(%[2]s))
+	}
+	for %[4]s, %[5]s := range %[2]s {
+		%[6]s
+	}
+}`, dst, src, g.typeName(t), k, v, put), nil
+}
+
+// loopVar is the name of a variable of the generated code at depth: i, i_1, i_2...
+func loopVar(name string, depth int) string {
+	if depth == 0 {
+		return name
+	}
+
+	return fmt.Sprintf("%s_%d", name, depth)
 }
 
 // generator holds the state of one generated file: the imports its code needs.
 type generator struct {
 	p       *Package
 	pending map[*types.TypeName]bool // the types generated in this run
-	imports map[string]goImport // by path
-	names   map[string]bool     // the names the imports take
+	copying map[string]bool          // the slice and map types being copied, against recursion
+	imports map[string]goImport      // by path
+	names   map[string]bool          // the names the imports take
 }
 
 // goImport is one import of the generated file; Name is set when it differs

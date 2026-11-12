@@ -140,7 +140,7 @@ func TestGenerateErrors(t *testing.T) {
 		{pkg: bulk, typeName: "Missing", want: "not found"},
 		{pkg: bulk, typeName: "NotAStruct", want: "not a struct"},
 		{pkg: fieldwise, typeName: "Untagged", want: "holds a lock"},
-		{pkg: fieldwise, typeName: "ArrayOfMaps", want: "array of maps"},
+		{pkg: fieldwise, typeName: "Recursive", want: "type Tree contains itself"},
 	}
 
 	for _, tt := range tests {
@@ -541,5 +541,121 @@ func TestCopy(t *testing.T) {
 		if !strings.Contains(gen[typeName], want) {
 			t.Errorf("%s lacks %q:\n%s", typeName, want, gen[typeName])
 		}
+	}
+}
+
+// TestGenerateNested checks that nested collections share nothing with src:
+// slices of slices or of structs with CopyFrom, maps of slices or of maps,
+// arrays of arrays of slices, and so on.
+func TestGenerateNested(t *testing.T) {
+	t.Parallel()
+
+	gen := checkGenerated(t, "nested", map[string]string{
+		"root.go": `package root
+
+import "sync"
+
+type Inner struct{ B []byte }
+
+func (dst *Inner) CopyFrom(src *Inner) { dst.B = append(dst.B[:0], src.B...) }
+
+type Matrix [][]float64
+
+type T struct {
+	BB     [][]byte
+	Inners []Inner
+	Ptrs   []*Inner
+	MB     map[string][]byte
+	MI     map[string]Inner
+	AAB    [2][2][]byte
+	ASB    [2][][]byte
+	AM     [2]map[string]int
+	SM     []map[string]int
+	MM     map[string]map[string]int
+	Matrix Matrix
+	Plain  [2][2]int
+}
+
+type Locked struct {
+	Mu sync.Mutex ` + "`copy:\"-\"`" + `
+	BB [][]byte
+}
+`,
+		"root_test.go": `package root
+
+import (
+	"reflect"
+	"testing"
+)
+
+func source() *T {
+	return &T{
+		BB:     [][]byte{[]byte("bb")},
+		Inners: []Inner{{B: []byte("in")}},
+		Ptrs:   []*Inner{{B: []byte("p")}, nil},
+		MB:     map[string][]byte{"k": []byte("mb")},
+		MI:     map[string]Inner{"k": {B: []byte("mi")}},
+		AAB:    [2][2][]byte{{[]byte("aab")}},
+		ASB:    [2][][]byte{{[]byte("asb")}},
+		AM:     [2]map[string]int{{"k": 1}},
+		SM:     []map[string]int{{"k": 1}},
+		MM:     map[string]map[string]int{"k": {"k": 1}},
+		Matrix: Matrix{{1}},
+		Plain:  [2][2]int{{1}},
+	}
+}
+
+func mutate(t *T) {
+	t.BB[0][0] = 'X'
+	t.Inners[0].B[0] = 'X'
+	t.Ptrs[0].B[0] = 'X'
+	t.MB["k"][0] = 'X'
+	t.MI["k"].B[0] = 'X'
+	t.AAB[0][0][0] = 'X'
+	t.ASB[0][0][0] = 'X'
+	t.AM[0]["k"] = 9
+	t.SM[0]["k"] = 9
+	t.MM["k"]["k"] = 9
+	t.Matrix[0][0] = 9
+}
+
+func TestCopy(t *testing.T) {
+	src := source()
+
+	// dst's own memory, some of it larger than src's
+	dst := T{BB: [][]byte{make([]byte, 0, 8), make([]byte, 0, 8)}, Inners: make([]Inner, 0, 4)}
+	bb := &dst.BB[:1][0][:1][0]
+
+	dst.CopyFrom(src)
+
+	if !reflect.DeepEqual(&dst, source()) {
+		t.Fatalf("dst = %+v", dst)
+	}
+
+	if &dst.BB[0][0] != bb || cap(dst.Inners) != 4 {
+		t.Fatal("dst's own memory must be reused")
+	}
+
+	mutate(src)
+
+	if !reflect.DeepEqual(&dst, source()) {
+		t.Fatalf("dst changed with src: %+v", dst)
+	}
+
+	cp := source().Copy()
+	mutate(&cp)
+
+	var l Locked
+	l.CopyFrom(&Locked{BB: [][]byte{[]byte("l")}})
+
+	if string(l.BB[0]) != "l" {
+		t.Fatalf("l.BB = %q", l.BB)
+	}
+}
+`,
+	}, "T", "Locked")
+
+	if strings.Contains(gen["T"], "keepPlain") {
+		t.Errorf("an array of numbers needs no code:\n%s", gen["T"])
 	}
 }

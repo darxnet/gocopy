@@ -48,9 +48,16 @@ A `CopyFrom` into a pooled, already-sized `dst` allocates nothing.
 | map | entry by entry into dst's own map (`clear` first; a nil dst map is made, a nil src leaves dst empty) |
 | struct with `CopyFrom(*T)` | `dst.F.CopyFrom(&src.F)` |
 | pointer to struct with `CopyFrom(*T)` | into dst's own object; a nil dst gets a new one, a nil src gives nil |
-| array of slices / of structs with `CopyFrom` | element by element |
+| array | element by element, when the elements need a copy of their own |
+| slice of slices, maps, structs with `CopyFrom` or pointers to them | element by element into dst's own elements, up to its capacity (a larger src gets a new array) |
+| map of slices, maps, structs with `CopyFrom` or pointers to them | each value a new copy (dst's old values are dropped with `clear`) |
 | everything else (numbers, strings, pointers, interfaces, chans, funcs, plain structs) | assigned as it is |
 | a type parameter `T` of a generic struct | assigned as it is, whatever the type argument (`Box[[]byte]` shares it) |
+
+The rules apply at any depth: `[][]byte`, `map[string][]Inner` and
+`[2][3][]byte` share nothing with src. A type that contains itself through
+slices or maps (`type Tree []Tree`) has no end to copy: such a field needs a
+tag. Map keys are assigned.
 
 A generic struct gets `func (dst *Box[T]) CopyFrom(src *Box[T])`; a
 `[]T` or `map[K]V` field is still copied as a slice or a map.
@@ -62,8 +69,7 @@ Struct tags change the treatment of a field:
 | `copy:"-"` | dst keeps its own value |
 | `copy:"shallow"` | assigned as it is, even if it is a slice or a map — on purpose, and visibly |
 
-A field holding a lock **must** carry one of the two tags; an array of maps
-too. A lock is what `go vet` copylocks calls one — a type whose pointer is a
+A field holding a lock **must** carry one of the two tags. A lock is what `go vet` copylocks calls one — a type whose pointer is a
 `sync.Locker` while the value is not, so a custom `noCopy` counts — and any
 other `sync` or `sync/atomic` type except an interface (`sync.Locker` itself
 is assigned), also inside a nested struct or array, by value. Blank (`_`)

@@ -5,7 +5,9 @@
 // A generated CopyFrom(src) is one bulk assignment (*dst = *src) followed by
 // fixes for the fields that would otherwise share memory: slices are copied
 // into dst's own backing arrays (reusing their capacity), maps entry by entry
-// into dst's own map, nested values with a CopyFrom through it. Pointers,
+// into dst's own map, nested values with a CopyFrom through it — at any depth:
+// the elements of a [][]byte or the values of a map[string][]byte get their
+// own copies too. Pointers,
 // interfaces, channels and funcs are assigned as they are. Struct tags choose
 // a different treatment per field:
 //

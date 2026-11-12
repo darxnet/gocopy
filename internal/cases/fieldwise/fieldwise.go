@@ -44,7 +44,10 @@ type Untagged struct {
 	Mu sync.Mutex
 }
 
-// ArrayOfMaps is here for the error path of Generate.
-type ArrayOfMaps struct {
-	M [2]map[string]int
+// Tree contains itself: its copy would never end.
+type Tree []Tree
+
+// Recursive is here for the error path of Generate.
+type Recursive struct {
+	T Tree
 }
