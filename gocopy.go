@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go/format"
+	"go/token"
 	"go/types"
 	"maps"
 	"reflect"
@@ -50,11 +51,15 @@ func (p *Package) Generate(typeName string) ([]byte, error) {
 
 	// A struct with a lock or an atomic inside (even nested) cannot be copied
 	// with `*dst = *src` (go vet copylocks): then every field is copied on its own.
-	bulk := !containsLock(structType)
+	bulk := !isLockType(obj.Type())
 
 	for i := range structType.NumFields() {
 		f := structType.Field(i)
 		tag := reflect.StructTag(structType.Tag(i)).Get("copy")
+
+		if f.Name() == "_" {
+			continue // a blank field cannot be referred to: dst keeps its own
+		}
 
 		if tag == "" && isLockType(f.Type()) {
 			return nil, fmt.Errorf("gocopy: field %s.%s holds a lock or an atomic: "+
@@ -306,30 +311,50 @@ func (g *generator) importList() []goImport {
 	return list
 }
 
-// isLockType reports whether t is a sync or atomic type, or a struct holding one.
+// locker is sync.Locker, built here: the package being generated need not import sync.
+var locker = func() *types.Interface {
+	sig := types.NewSignatureType(nil, nil, nil, nil, nil, false)
+
+	return types.NewInterfaceType([]*types.Func{
+		types.NewFunc(token.NoPos, nil, "Lock", sig),
+		types.NewFunc(token.NoPos, nil, "Unlock", sig),
+	}, nil).Complete()
+}()
+
+// isLockType reports whether a value of type t must not be copied: a sync or
+// sync/atomic type other than an interface, a struct whose pointer is a
+// sync.Locker while the value is not (the rule of go vet copylocks, which
+// catches a custom noCopy), or a struct or array holding one by value.
 func isLockType(t types.Type) bool {
-	if named, ok := t.(*types.Named); ok {
-		if p := named.Obj().Pkg(); p != nil && (p.Path() == "sync" || p.Path() == "sync/atomic") {
+	return lockType(t, make(map[types.Type]bool))
+}
+
+func lockType(t types.Type, seen map[types.Type]bool) bool {
+	if seen[t] {
+		return false
+	}
+
+	seen[t] = true
+
+	if named, ok := types.Unalias(t).(*types.Named); ok {
+		if p := named.Obj().Pkg(); p != nil && (p.Path() == "sync" || p.Path() == "sync/atomic") && !types.IsInterface(t) {
 			return true
 		}
 	}
 
 	switch ut := t.Underlying().(type) {
 	case *types.Struct:
-		return containsLock(ut)
-	case *types.Array:
-		return isLockType(ut.Elem())
-	}
-
-	return false
-}
-
-// containsLock reports whether any field of st, nested by value, is a lock type.
-func containsLock(st *types.Struct) bool {
-	for f := range st.Fields() {
-		if isLockType(f.Type()) {
+		if types.Implements(types.NewPointer(t), locker) && !types.Implements(t, locker) {
 			return true
 		}
+
+		for f := range ut.Fields() {
+			if lockType(f.Type(), seen) {
+				return true
+			}
+		}
+	case *types.Array:
+		return lockType(ut.Elem(), seen)
 	}
 
 	return false

@@ -58,8 +58,12 @@ Struct tags change the treatment of a field:
 | `copy:"-"` | dst keeps its own value |
 | `copy:"shallow"` | assigned as it is, even if it is a slice or a map — on purpose, and visibly |
 
-A field holding a `sync` or `sync/atomic` type (also inside a nested struct
-or array, by value) **must** carry one of the two tags; an array of maps too.
+A field holding a lock **must** carry one of the two tags; an array of maps
+too. A lock is what `go vet` copylocks calls one — a type whose pointer is a
+`sync.Locker` while the value is not, so a custom `noCopy` counts — and any
+other `sync` or `sync/atomic` type except an interface (`sync.Locker` itself
+is assigned), also inside a nested struct or array, by value. Blank (`_`)
+fields are never copied: dst keeps its own.
 
 ## Two modes
 

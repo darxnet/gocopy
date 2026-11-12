@@ -395,3 +395,84 @@ type T struct {
 		t.Errorf("Inner's CopyFrom is not called:\n%s", gen["T"])
 	}
 }
+
+// TestGenerateLocks checks lock detection against go vet copylocks: a type
+// whose pointer is a sync.Locker and value is not (a custom noCopy) is a lock,
+// a sync.Locker interface is not, and a blank field is never referred to.
+func TestGenerateLocks(t *testing.T) {
+	t.Parallel()
+
+	const locks = `package root
+
+import "sync"
+
+type noCopy struct{}
+
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
+
+type NoCopy struct {
+	nc   noCopy ` + "`copy:\"-\"`" + `
+	Data []byte
+}
+
+type Blank struct {
+	_    noCopy
+	_    []byte
+	Data []byte
+}
+
+type Locker struct {
+	L    sync.Locker
+	Data []byte
+}
+
+type Untagged struct {
+	nc [2]noCopy
+}
+`
+
+	gen := checkGenerated(t, "locks", map[string]string{
+		"root.go": locks,
+		"root_test.go": `package root
+
+import (
+	"sync"
+	"testing"
+)
+
+func TestCopy(t *testing.T) {
+	var mu sync.Mutex
+
+	src := Locker{L: &mu, Data: []byte("x")}
+	dst := src.Copy()
+
+	if dst.L != &mu || string(dst.Data) != "x" {
+		t.Fatalf("dst = %+v", dst)
+	}
+
+	var b Blank
+	b.CopyFrom(&Blank{Data: []byte("b")})
+
+	if string(b.Data) != "b" {
+		t.Fatalf("b.Data = %q", b.Data)
+	}
+}
+`,
+	}, "NoCopy", "Blank", "Locker")
+
+	for typeName, bulk := range map[string]bool{"NoCopy": false, "Blank": false, "Locker": true} {
+		if got := strings.Contains(gen[typeName], "Copy() (dst"); got != bulk {
+			t.Errorf("%s: Copy method generated = %v, want %v:\n%s", typeName, got, bulk, gen[typeName])
+		}
+	}
+
+	pkg, err := gocopy.Load(writeModule(t, "untagged", map[string]string{"root.go": locks}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pkg.Generate("Untagged"); err == nil || !strings.Contains(err.Error(), "holds a lock") {
+		t.Fatalf("Generate(Untagged) error = %v, want a lock error", err)
+	}
+}
