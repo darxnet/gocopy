@@ -12,6 +12,9 @@ func (dst *State) CopyFrom(src *State) {
 	// dst.Count kept via tag
 	// dst.Stats kept via tag
 	dst.Data = append(dst.Data[:0], src.Data...)
+	if dst.Data == nil && src.Data != nil {
+		dst.Data = make([]byte, 0)
+	}
 	clear(dst.M)
 	if src.M != nil {
 		if dst.M == nil {
@@ -32,6 +35,9 @@ func (dst *State) CopyFrom(src *State) {
 	}
 	for i := range src.Arr {
 		dst.Arr[i] = append(dst.Arr[i][:0], src.Arr[i]...)
+		if dst.Arr[i] == nil && src.Arr[i] != nil {
+			dst.Arr[i] = make([]byte, 0)
+		}
 	}
 	for i := range src.Inners {
 		dst.Inners[i].CopyFrom(&src.Inners[i])

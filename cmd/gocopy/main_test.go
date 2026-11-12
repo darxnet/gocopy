@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -118,5 +120,90 @@ func TestRunWriteError(t *testing.T) {
 	code := run([]string{"-dir", dir, "-type", "Request"}, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "write") {
 		t.Fatalf("exit code %d, stderr %q, want a write error", code, stderr.String())
+	}
+}
+
+// TestRunIdempotent checks that a second run writes what the first did: a
+// type sees the CopyFrom of a type generated in the same run (even listed
+// after it), and of itself.
+func TestRunIdempotent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/c\n\ngo 1.24\n",
+		"c.go": `package c
+
+type Request struct {
+	In  Inner
+	Ptr *Inner
+}
+
+type Inner struct{ B []byte }
+
+type Node struct {
+	Next *Node
+	Data []byte
+}
+`,
+		"c_test.go": `package c
+
+import "testing"
+
+func TestCopy(t *testing.T) {
+	src := Request{In: Inner{B: []byte("a")}, Ptr: &Inner{B: []byte("b")}}
+	dst := src.Copy()
+	src.In.B[0], src.Ptr.B[0] = 'X', 'X'
+
+	if string(dst.In.B) != "a" || string(dst.Ptr.B) != "b" {
+		t.Fatalf("dst = %+v", dst)
+	}
+
+	list := Node{Next: &Node{Data: []byte("n")}}
+	cp := list.Copy()
+	list.Next.Data[0] = 'X'
+
+	if cp.Next == list.Next || string(cp.Next.Data) != "n" {
+		t.Fatal("Next must be copied")
+	}
+}
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files := []string{"request_copy.gen.go", "inner_copy.gen.go", "node_copy.gen.go"}
+	runs := make([][]string, 2)
+
+	for i := range runs {
+		var stderr bytes.Buffer
+
+		if code := run([]string{"-dir", dir, "-type", "Request,Inner,Node"}, &stderr); code != 0 {
+			t.Fatalf("run %d: exit code %d: %s", i, code, stderr.String())
+		}
+
+		for _, name := range files {
+			src, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // a path under t.TempDir()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			runs[i] = append(runs[i], string(src))
+		}
+	}
+
+	if !slices.Equal(runs[0], runs[1]) {
+		t.Fatalf("the second run differs:\n%s\n--- first run ---\n%s",
+			strings.Join(runs[1], "\n"), strings.Join(runs[0], "\n"))
+	}
+
+	cmd := exec.Command("go", "test", "-count=1", ".")
+	cmd.Dir = dir
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test: %v\n%s\n%s", err, out, strings.Join(runs[0], "\n"))
 	}
 }
