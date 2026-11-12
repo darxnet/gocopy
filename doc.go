@@ -7,9 +7,8 @@
 // into dst's own backing arrays (reusing their capacity), maps entry by entry
 // into dst's own map, nested values with a CopyFrom through it — at any depth:
 // the elements of a [][]byte or the values of a map[string][]byte get their
-// own copies too. Pointers,
-// interfaces, channels and funcs are assigned as they are. Struct tags choose
-// a different treatment per field:
+// own copies too. Pointers, interfaces, channels and funcs are assigned as
+// they are. Struct tags choose a different treatment per field:
 //
 //	Buf   []byte  `copy:"-"`        // dst keeps its own value
 //	Table []byte  `copy:"shallow"`  // assigned as it is, on purpose
