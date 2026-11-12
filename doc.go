@@ -22,6 +22,9 @@
 //
 //	//go:generate go tool gocopy -type=Request
 //
-// which writes request_copy.gen.go in the same package. [Load] and
-// [Package.Generate] expose the generator to other tools.
+// which writes request_copy.gen.go in the same package. Name all the types of
+// a package in one -type list: a type sees the CopyFrom of another (or of
+// itself) generated in the same run, so the output does not depend on their
+// order or on the files already generated. [Load], [Package.Generate] and
+// [Package.GenerateAll] expose the generator to other tools.
 package gocopy

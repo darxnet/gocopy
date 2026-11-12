@@ -30,8 +30,47 @@ type deepField struct {
 
 // Generate returns the gofmt-ed source of a file declaring
 // `func (dst *T) CopyFrom(src *T)` — and `func (src *T) Copy() T` when T holds
-// no lock — for the struct type named typeName.
+// no lock — for the struct type named typeName. It is GenerateAll for the one
+// type.
 func (p *Package) Generate(typeName string) ([]byte, error) {
+	srcs, err := p.GenerateAll(typeName)
+	if err != nil {
+		return nil, err
+	}
+
+	return srcs[0], nil
+}
+
+// GenerateAll returns what Generate does for each of typeNames, as one run:
+// a field of one of these types (or of a pointer to one) is copied through
+// the CopyFrom being generated for it, whether or not a file of an earlier
+// run declares it yet. The output thus does not depend on the order of the
+// types or on the files already generated, and a type that refers to itself
+// (Next *Node) copies the pointed-to value recursively from the first run.
+func (p *Package) GenerateAll(typeNames ...string) ([][]byte, error) {
+	pending := make(map[*types.TypeName]bool, len(typeNames))
+
+	for _, typeName := range typeNames {
+		if obj, ok := p.pkg.Scope().Lookup(typeName).(*types.TypeName); ok {
+			pending[obj] = true
+		}
+	}
+
+	srcs := make([][]byte, len(typeNames))
+
+	for i, typeName := range typeNames {
+		src, err := p.generate(typeName, pending)
+		if err != nil {
+			return nil, err
+		}
+
+		srcs[i] = src
+	}
+
+	return srcs, nil
+}
+
+func (p *Package) generate(typeName string, pending map[*types.TypeName]bool) ([]byte, error) {
 	obj := p.pkg.Scope().Lookup(typeName)
 	if obj == nil {
 		return nil, fmt.Errorf("gocopy: type %s not found in package %s", typeName, p.pkg.Name())
@@ -47,7 +86,7 @@ func (p *Package) Generate(typeName string) ([]byte, error) {
 		plain  []deepField // field-wise mode: every field that is simply assigned
 	)
 
-	g := &generator{p: p, imports: make(map[string]goImport), names: make(map[string]bool)}
+	g := &generator{p: p, pending: pending, imports: make(map[string]goImport), names: make(map[string]bool)}
 
 	// a generic type's methods name its type parameters in the receiver
 	recv, lockCheck := typeName, obj.Type()
@@ -176,7 +215,7 @@ func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, 
 		return d, true, nil
 
 	case *types.Struct:
-		if hasCopyFrom(f.Type()) {
+		if g.hasCopyFrom(f.Type()) {
 			d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
 			d.Copy = fmt.Sprintf("dst.%s = keep%s\n\tdst.%s.CopyFrom(&src.%s)", name, name, name, name)
 			d.Direct = fmt.Sprintf("dst.%s.CopyFrom(&src.%s)", name, name)
@@ -185,10 +224,10 @@ func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, 
 		}
 
 	case *types.Array:
-		return arrayCode(name, ut)
+		return g.arrayCode(name, ut)
 
 	case *types.Pointer:
-		if _, ok := ut.Elem().Underlying().(*types.Struct); ok && hasCopyFrom(ut.Elem()) {
+		if _, ok := ut.Elem().Underlying().(*types.Struct); ok && g.hasCopyFrom(ut.Elem()) {
 			// dst keeps its own object and copies into it; a nil dst gets a new one
 			d.Keep = fmt.Sprintf("keep%s := dst.%s", name, name)
 			d.Direct = fmt.Sprintf(`if src.%[1]s == nil {
@@ -208,7 +247,7 @@ func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, 
 	return d, false, nil
 }
 
-func arrayCode(name string, ut *types.Array) (deepField, bool, error) {
+func (g *generator) arrayCode(name string, ut *types.Array) (deepField, bool, error) {
 	d := deepField{Field: name}
 
 	switch ut.Elem().Underlying().(type) {
@@ -223,7 +262,7 @@ func arrayCode(name string, ut *types.Array) (deepField, bool, error) {
 		return d, true, nil
 
 	case *types.Struct:
-		if !hasCopyFrom(ut.Elem()) {
+		if !g.hasCopyFrom(ut.Elem()) {
 			return d, false, nil
 		}
 
@@ -246,6 +285,7 @@ func arrayCode(name string, ut *types.Array) (deepField, bool, error) {
 // generator holds the state of one generated file: the imports its code needs.
 type generator struct {
 	p       *Package
+	pending map[*types.TypeName]bool // the types generated in this run
 	imports map[string]goImport // by path
 	names   map[string]bool     // the names the imports take
 }
@@ -378,8 +418,13 @@ func lockType(t types.Type, seen map[types.Type]bool) bool {
 	return false
 }
 
-// hasCopyFrom reports whether *T has a method CopyFrom(*T).
-func hasCopyFrom(t types.Type) bool {
+// hasCopyFrom reports whether *T has a method CopyFrom(*T), or will have
+// once this run is over.
+func (g *generator) hasCopyFrom(t types.Type) bool {
+	if named, ok := types.Unalias(t).(*types.Named); ok && g.pending[named.Origin().Obj()] {
+		return true
+	}
+
 	meth, _, _ := types.LookupFieldOrMethod(types.NewPointer(t), true, nil, "CopyFrom")
 	if meth == nil {
 		return false

@@ -244,17 +244,17 @@ func checkGenerated(t *testing.T, name string, files map[string]string, typeName
 		t.Fatal(err)
 	}
 
+	srcs, err := pkg.GenerateAll(typeNames...)
+	if err != nil {
+		t.Fatalf("GenerateAll(%v): %v", typeNames, err)
+	}
+
 	gen := make(map[string]string, len(typeNames))
 
-	for _, typeName := range typeNames {
-		src, err := pkg.Generate(typeName)
-		if err != nil {
-			t.Fatalf("Generate(%s): %v", typeName, err)
-		}
+	for i, typeName := range typeNames {
+		gen[typeName] = string(srcs[i])
 
-		gen[typeName] = string(src)
-
-		if err := os.WriteFile(filepath.Join(dir, gocopy.FileName(typeName)), src, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, gocopy.FileName(typeName)), srcs[i], 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
