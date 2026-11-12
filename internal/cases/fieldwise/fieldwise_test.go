@@ -64,6 +64,13 @@ func TestStateCopyFrom(t *testing.T) {
 		t.Fatal("dst changed with src")
 	}
 
+	var empty fieldwise.State
+	empty.CopyFrom(&fieldwise.State{Data: []byte{}, Arr: [2][]byte{{}, {}}})
+
+	if empty.Data == nil || empty.Arr[0] == nil {
+		t.Fatal("an empty src slice must not come out nil")
+	}
+
 	dst.CopyFrom(&fieldwise.State{})
 
 	if len(dst.M) != 0 || dst.InnerPtr != nil || len(dst.Data) != 0 {

@@ -141,6 +141,7 @@ func TestGenerateErrors(t *testing.T) {
 		{pkg: bulk, typeName: "NotAStruct", want: "not a struct"},
 		{pkg: fieldwise, typeName: "Untagged", want: "holds a lock"},
 		{pkg: fieldwise, typeName: "Recursive", want: "type Tree contains itself"},
+		{pkg: fieldwise, typeName: "RecursiveMap", want: "type Index contains itself"},
 	}
 
 	for _, tt := range tests {
@@ -300,6 +301,7 @@ var v1 = 1
 type T struct {
 	AB  map[a.K]b.V
 	V1  map[xv1.T]yv1.U
+	V1s []map[xv1.T]bool
 	Box *box.Box[a.K]
 }
 `,

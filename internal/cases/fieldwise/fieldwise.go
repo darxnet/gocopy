@@ -47,7 +47,14 @@ type Untagged struct {
 // Tree contains itself: its copy would never end.
 type Tree []Tree
 
-// Recursive is here for the error path of Generate.
+// Index contains itself too, as a map value.
+type Index map[string][]Index
+
+// Recursive and RecursiveMap are here for the error path of Generate.
 type Recursive struct {
 	T Tree
+}
+
+type RecursiveMap struct {
+	I Index
 }

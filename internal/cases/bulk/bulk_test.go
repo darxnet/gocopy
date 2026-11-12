@@ -115,6 +115,17 @@ func TestRequestCopyFromNil(t *testing.T) {
 	}
 }
 
+func TestRequestCopyEmpty(t *testing.T) {
+	t.Parallel()
+
+	src := &bulk.Request{Data: []byte{}, Names: []string{}, Arr: [2][]byte{{}, {}}}
+	dst := src.Copy()
+
+	if dst.Data == nil || dst.Names == nil || dst.Arr[0] == nil || dst.Arr[1] == nil {
+		t.Fatalf("dst = %#v: an empty src slice must not come out nil", dst)
+	}
+}
+
 func TestRequestCopy(t *testing.T) {
 	t.Parallel()
 
