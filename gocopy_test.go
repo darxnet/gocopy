@@ -476,3 +476,70 @@ func TestCopy(t *testing.T) {
 		t.Fatalf("Generate(Untagged) error = %v, want a lock error", err)
 	}
 }
+
+// TestGenerateGeneric checks the methods of generic structs: the receiver
+// lists the type parameters.
+func TestGenerateGeneric(t *testing.T) {
+	t.Parallel()
+
+	gen := checkGenerated(t, "generic", map[string]string{
+		"root.go": `package root
+
+import "sync"
+
+type Box[T any] struct {
+	Items []T
+	M     map[string]T
+	X     T
+}
+
+type Pair[K comparable, V any] struct {
+	M   map[K]V
+	Box Box[V]
+}
+
+type Locked[_ any] struct {
+	Mu   sync.Mutex ` + "`copy:\"-\"`" + `
+	Data []byte
+}
+`,
+		"root_test.go": `package root
+
+import "testing"
+
+func TestCopy(t *testing.T) {
+	src := Box[string]{Items: []string{"a"}, M: map[string]string{"k": "v"}, X: "x"}
+	dst := src.Copy()
+	src.Items[0], src.M["k"] = "A", "V"
+
+	if dst.Items[0] != "a" || dst.M["k"] != "v" || dst.X != "x" {
+		t.Fatalf("dst = %+v", dst)
+	}
+
+	var p Pair[int, []byte]
+	p.CopyFrom(&Pair[int, []byte]{M: map[int][]byte{1: nil}})
+
+	if len(p.M) != 1 {
+		t.Fatalf("p = %+v", p)
+	}
+
+	var l Locked[int]
+	l.CopyFrom(&Locked[int]{Data: []byte("d")})
+
+	if string(l.Data) != "d" {
+		t.Fatalf("l.Data = %q", l.Data)
+	}
+}
+`,
+	}, "Box", "Pair", "Locked")
+
+	for typeName, want := range map[string]string{
+		"Box":    "func (src *Box[T]) Copy() (dst Box[T])",
+		"Pair":   "func (dst *Pair[K, V]) CopyFrom(src *Pair[K, V])",
+		"Locked": "func (dst *Locked[_0]) CopyFrom(src *Locked[_0])",
+	} {
+		if !strings.Contains(gen[typeName], want) {
+			t.Errorf("%s lacks %q:\n%s", typeName, want, gen[typeName])
+		}
+	}
+}

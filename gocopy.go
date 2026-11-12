@@ -49,9 +49,27 @@ func (p *Package) Generate(typeName string) ([]byte, error) {
 
 	g := &generator{p: p, imports: make(map[string]goImport), names: make(map[string]bool)}
 
+	// a generic type's methods name its type parameters in the receiver
+	recv, lockCheck := typeName, obj.Type()
+
+	if named, ok := obj.Type().(*types.Named); ok && named.TypeParams().Len() > 0 {
+		params := make([]string, named.TypeParams().Len())
+		for i := range params {
+			params[i] = named.TypeParams().At(i).Obj().Name()
+			if params[i] == "_" { // src's type must name it
+				params[i] = fmt.Sprintf("_%d", i)
+			}
+
+			g.names[params[i]] = true // an import must not be shadowed by one
+		}
+
+		recv += "[" + strings.Join(params, ", ") + "]"
+		lockCheck = structType // Implements is unspecified for an uninstantiated type
+	}
+
 	// A struct with a lock or an atomic inside (even nested) cannot be copied
 	// with `*dst = *src` (go vet copylocks): then every field is copied on its own.
-	bulk := !isLockType(obj.Type())
+	bulk := !isLockType(lockCheck)
 
 	for i := range structType.NumFields() {
 		f := structType.Field(i)
@@ -84,14 +102,14 @@ func (p *Package) Generate(typeName string) ([]byte, error) {
 
 	data := struct {
 		PackageName string
-		TypeName    string
+		Recv        string
 		Fields      []deepField
 		Plain       []deepField
 		Imports     []goImport
 		Bulk        bool
 	}{
 		PackageName: p.pkg.Name(),
-		TypeName:    typeName,
+		Recv:        recv,
 		Fields:      fields,
 		Plain:       plain,
 		Imports:     g.importList(),
@@ -390,7 +408,7 @@ import (
 
 // CopyFrom makes dst an independent copy of src: one bulk copy, then the
 // fields that would share memory get dst's own, reusing its capacity.
-func (dst *{{.TypeName}}) CopyFrom(src *{{.TypeName}}) {
+func (dst *{{.Recv}}) CopyFrom(src *{{.Recv}}) {
 {{- range .Fields}}
 	{{.Keep}}
 {{- end}}
@@ -403,7 +421,7 @@ func (dst *{{.TypeName}}) CopyFrom(src *{{.TypeName}}) {
 }
 
 // Copy returns a new independent copy of src.
-func (src *{{.TypeName}}) Copy() (dst {{.TypeName}}) {
+func (src *{{.Recv}}) Copy() (dst {{.Recv}}) {
 	dst.CopyFrom(src)
 	return dst
 }
@@ -412,7 +430,7 @@ func (src *{{.TypeName}}) Copy() (dst {{.TypeName}}) {
 // CopyFrom makes dst an independent copy of src, field by field: the type
 // holds a lock or an atomic, so it cannot be assigned or returned as a whole
 // (there is no Copy method for it). Fields tagged copy:"-" keep dst's value.
-func (dst *{{.TypeName}}) CopyFrom(src *{{.TypeName}}) {
+func (dst *{{.Recv}}) CopyFrom(src *{{.Recv}}) {
 {{- range .Plain}}
 	{{.Copy}}
 {{- end}}

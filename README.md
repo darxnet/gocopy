@@ -50,6 +50,10 @@ A `CopyFrom` into a pooled, already-sized `dst` allocates nothing.
 | pointer to struct with `CopyFrom(*T)` | into dst's own object; a nil dst gets a new one, a nil src gives nil |
 | array of slices / of structs with `CopyFrom` | element by element |
 | everything else (numbers, strings, pointers, interfaces, chans, funcs, plain structs) | assigned as it is |
+| a type parameter `T` of a generic struct | assigned as it is, whatever the type argument (`Box[[]byte]` shares it) |
+
+A generic struct gets `func (dst *Box[T]) CopyFrom(src *Box[T])`; a
+`[]T` or `map[K]V` field is still copied as a slice or a map.
 
 Struct tags change the treatment of a field:
 
