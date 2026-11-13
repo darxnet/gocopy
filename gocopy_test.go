@@ -730,3 +730,144 @@ func TestNil(t *testing.T) {
 `,
 	}, "T", "Locked")
 }
+
+// TestGenerateClone checks that an interface declaring Clone() itself copies
+// the value inside, and that copy:"clone" copies a field through its Clone.
+func TestGenerateClone(t *testing.T) {
+	t.Parallel()
+
+	srcs := checkGenerated(t, "clone", map[string]string{
+		"root.go": `package root
+
+import (
+	"crypto/tls"
+	"fmt"
+	"net/http"
+	"sync"
+)
+
+type Shape interface {
+	Area() int
+	Clone() Shape
+}
+
+type Rect struct{ W, H int }
+
+func (r *Rect) Area() int    { return r.W * r.H }
+func (r *Rect) Clone() Shape { c := *r; return &c }
+
+type Version struct{ parts []int }
+
+func (v Version) Clone() Version { return Version{parts: append([]int(nil), v.parts...)} }
+
+type T struct {
+	S      Shape
+	Shapes []Shape
+	ByName map[string]Shape
+	Arr    [2]Shape
+	Str    fmt.Stringer
+	Conf   *tls.Config ` + "`copy:\"clone\"`" + `
+	Header http.Header ` + "`copy:\"clone\"`" + `
+	Ver    Version     ` + "`copy:\"clone\"`" + `
+}
+
+type Locked struct {
+	Mu sync.Mutex ` + "`copy:\"-\"`" + `
+	S  Shape
+}
+
+type Box[V interface{ Clone() V }] struct {
+	Cloned V ` + "`copy:\"clone\"`" + `
+	Shared V
+}
+`,
+		"root_test.go": `package root
+
+import (
+	"crypto/tls"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+func TestClone(t *testing.T) {
+	r, sb := &Rect{1, 2}, &strings.Builder{}
+	src := T{
+		S:      r,
+		Shapes: []Shape{r, nil},
+		ByName: map[string]Shape{"r": r},
+		Arr:    [2]Shape{r},
+		Str:    sb,
+		Conf:   &tls.Config{ServerName: "a"},
+		Header: http.Header{"K": {"v"}},
+		Ver:    Version{parts: []int{1}},
+	}
+	cp := src.Copy()
+
+	if cp.S == Shape(r) || cp.Shapes[0] == Shape(r) || cp.ByName["r"] == Shape(r) || cp.Arr[0] == Shape(r) {
+		t.Fatal("a Shape is shared with src")
+	}
+
+	if cp.S.Area() != 2 || cp.Shapes[1] != nil || cp.Arr[1] != nil {
+		t.Fatalf("Copy = %+v, want the shapes cloned and nil kept nil", cp)
+	}
+
+	if cp.Str != src.Str {
+		t.Fatal("an interface without Clone must be assigned")
+	}
+
+	if cp.Conf == src.Conf || cp.Conf.ServerName != "a" {
+		t.Fatal("Conf is not cloned")
+	}
+
+	cp.Header["K"][0], cp.Ver.parts[0] = "w", 2
+	if src.Header["K"][0] != "v" || src.Ver.parts[0] != 1 {
+		t.Fatal("Header or Ver is shared with src")
+	}
+
+	dst := T{S: &Rect{3, 3}, Conf: &tls.Config{}}
+	dst.CopyFrom(&T{})
+
+	if dst.S != nil || dst.Conf != nil {
+		t.Fatalf("a nil src gave %+v, want nil", dst)
+	}
+
+	var l Locked
+	l.CopyFrom(&Locked{S: r})
+
+	if l.S == Shape(r) || l.S.Area() != 2 {
+		t.Fatal("Locked.S is not cloned")
+	}
+
+	b := Box[Version]{Cloned: Version{parts: []int{1}}, Shared: Version{parts: []int{1}}}
+	bc := b.Copy()
+	bc.Cloned.parts[0], bc.Shared.parts[0] = 2, 2
+
+	if b.Cloned.parts[0] != 1 || b.Shared.parts[0] != 2 {
+		t.Fatal("Box: Cloned must be cloned and Shared assigned")
+	}
+}
+`,
+	}, "T", "Locked", "Box")
+
+	if strings.Contains(srcs["T"], "keepS ") {
+		t.Errorf("T keeps dst's Shape, which it never uses:\n%s", srcs["T"])
+	}
+}
+
+func TestGenerateCloneMissing(t *testing.T) {
+	t.Parallel()
+
+	dir := writeModule(t, "noclone", map[string]string{
+		"root.go": "package root\n\ntype T struct {\n\tB []byte `copy:\"clone\"`\n}\n",
+	})
+
+	pkg, err := gocopy.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pkg.Generate("T"); err == nil || !strings.Contains(err.Error(), "has no method Clone() []byte") {
+		t.Fatalf("Generate(T) error = %v, want no Clone", err)
+	}
+}
