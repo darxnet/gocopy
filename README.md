@@ -54,7 +54,8 @@ A `CopyFrom` into a pooled, already-sized `dst` allocates nothing.
 | array | element by element, when the elements need a copy of their own |
 | slice of slices, maps, structs with `CopyFrom` or pointers to them | element by element into dst's own elements, up to its capacity (a larger src gets a new array) |
 | map of slices, maps, structs with `CopyFrom` or pointers to them | each value a new copy (dst's old values are dropped with `clear`) |
-| everything else (numbers, strings, pointers, interfaces, chans, funcs, plain structs) | assigned as it is |
+| interface that declares `Clone()` returning itself (`type Shape interface { ...; Clone() Shape }`) | `dst.F = src.F.Clone()`, whatever the value inside; a nil src gives nil |
+| everything else (numbers, strings, pointers, other interfaces, chans, funcs, plain structs) | assigned as it is |
 | a type parameter `T` of a generic struct | assigned as it is, whatever the type argument (`Box[[]byte]` shares it) |
 
 A non-nil src slice or map gives a non-nil dst one, even when empty, so
@@ -77,6 +78,7 @@ Struct tags change the treatment of a field:
 |---|---|
 | `copy:"-"` | dst keeps its own value |
 | `copy:"shallow"` | assigned as it is, even if it is a slice or a map — on purpose, and visibly |
+| `copy:"clone"` | `dst.F = src.F.Clone()` for a type with a method `Clone()` returning its own type, like `*tls.Config` or `http.Header`; a nil src gives nil (a type parameter's Clone is called whatever the value) |
 
 A field holding a lock **must** carry one of the two tags. A lock is what
 `go vet` copylocks calls one — a type whose pointer is a `sync.Locker` while
@@ -143,7 +145,8 @@ for tools that want the source without the file.
   never ends — tag such a field `copy:"shallow"` to share it instead.
 - Pointers other than "pointer to a struct with CopyFrom" are shared with
   `src`. That is usually right for references to long-lived objects; for
-  an owned object, give its type a `CopyFrom`.
+  an owned object, give its type a `CopyFrom`, or tag the field
+  `copy:"clone"` when the type has its own `Clone()`.
 
 ## See also
 
