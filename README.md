@@ -52,8 +52,8 @@ A `CopyFrom` into a pooled, already-sized `dst` allocates nothing.
 | struct with `CopyFrom(*T)` | `dst.F.CopyFrom(&src.F)` |
 | pointer to struct with `CopyFrom(*T)` | into dst's own object; a nil dst gets a new one, a nil src gives nil |
 | array | element by element, when the elements need a copy of their own |
-| slice of slices, maps, structs with `CopyFrom` or pointers to them | element by element into dst's own elements, up to its capacity (a larger src gets a new array) |
-| map of slices, maps, structs with `CopyFrom` or pointers to them | each value a new copy (dst's old values are dropped with `clear`) |
+| slice of slices, maps, structs with `CopyFrom` or pointers to them | element by element into dst's own elements, up to its capacity (a larger src gets a new array); a nil pointer element stays nil |
+| map of slices, maps, structs with `CopyFrom` or pointers to them | each value a new copy (dst's old values are dropped with `clear`); a nil pointer value stays nil |
 | interface that declares `Clone()` returning itself (`type Shape interface { ...; Clone() Shape }`) | `dst.F = src.F.Clone()`, whatever the value inside; a nil src gives nil |
 | everything else (numbers, strings, pointers, other interfaces, chans, funcs, plain structs) | assigned as it is |
 | a type parameter `T` of a generic struct | assigned as it is, whatever the type argument (`Box[[]byte]` shares it) |

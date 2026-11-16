@@ -30,6 +30,10 @@ type Request struct {
 	Arr      [2][]byte
 	Inners   [2]Inner
 	Ptr      *int
+	Ptrs     []*int
+	PtrMap   map[string]*int
+	InPtrs   []*Inner
+	InPtrMap map[string]*Inner
 	Any      any
 	N        int
 	S        string
