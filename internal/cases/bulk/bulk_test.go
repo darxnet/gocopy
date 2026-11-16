@@ -118,10 +118,10 @@ func TestRequestCopyFromNil(t *testing.T) {
 func TestRequestCopyEmpty(t *testing.T) {
 	t.Parallel()
 
-	src := &bulk.Request{Data: []byte{}, Names: []string{}, Arr: [2][]byte{{}, {}}}
+	src := &bulk.Request{Data: []byte{}, Names: []string{}, Arr: [2][]byte{{}, {}}, Ptrs: []*int{}}
 	dst := src.Copy()
 
-	if dst.Data == nil || dst.Names == nil || dst.Arr[0] == nil || dst.Arr[1] == nil {
+	if dst.Data == nil || dst.Names == nil || dst.Arr[0] == nil || dst.Arr[1] == nil || dst.Ptrs == nil {
 		t.Fatalf("dst = %#v: an empty src slice must not come out nil", dst)
 	}
 }
@@ -156,5 +156,42 @@ func assertEqualContent(t *testing.T, dst, src *bulk.Request) {
 		!slices.Equal(dst.Inners[0].B, src.Inners[0].B) || !slices.Equal(dst.Inners[1].B, src.Inners[1].B) ||
 		dst.Ptr != src.Ptr || dst.Any != src.Any || dst.N != src.N || dst.S != src.S {
 		t.Fatalf("dst = %+v, want the content of %+v", dst, src)
+	}
+}
+
+// A nil pointer inside a slice or a map stays nil, not a pointer to a zero
+// value (jinzhu/copier#246 made map[string]*int{"nil": nil} a pointer to 0).
+func TestRequestCopyNilElements(t *testing.T) {
+	t.Parallel()
+
+	n := 1
+	src := &bulk.Request{
+		Ptrs:     []*int{nil, &n},
+		PtrMap:   map[string]*int{"nil": nil, "n": &n},
+		InPtrs:   []*bulk.Inner{nil, {B: []byte("b")}},
+		InPtrMap: map[string]*bulk.Inner{"nil": nil, "b": {B: []byte("b")}},
+	}
+
+	// dst has objects where src has nil: they must not survive
+	dst := bulk.Request{
+		InPtrs:   []*bulk.Inner{{N: 9}, {N: 9}},
+		InPtrMap: map[string]*bulk.Inner{"nil": {N: 9}},
+	}
+
+	for _, copied := range []bulk.Request{src.Copy(), func() bulk.Request { dst.CopyFrom(src); return dst }()} {
+		v, ok := copied.PtrMap["nil"]
+		if !ok || v != nil || copied.Ptrs[0] != nil || copied.Ptrs[1] != &n || copied.PtrMap["n"] != &n {
+			t.Fatalf("Ptrs = %v, PtrMap = %v: nil must stay nil, others are assigned", copied.Ptrs, copied.PtrMap)
+		}
+
+		w, ok := copied.InPtrMap["nil"]
+		if !ok || w != nil || copied.InPtrs[0] != nil {
+			t.Fatalf("InPtrs[0] = %v, InPtrMap[nil] = %v: nil must stay nil", copied.InPtrs[0], w)
+		}
+
+		if copied.InPtrs[1] == src.InPtrs[1] || string(copied.InPtrs[1].B) != "b" ||
+			copied.InPtrMap["b"] == src.InPtrMap["b"] || string(copied.InPtrMap["b"].B) != "b" {
+			t.Fatal("non-nil *Inner elements must be copied into objects of dst's own")
+		}
 	}
 }

@@ -17,6 +17,10 @@ func (dst *Request) CopyFrom(src *Request) {
 	keepInnerPtr := dst.InnerPtr
 	keepArr := dst.Arr
 	keepInners := dst.Inners
+	keepPtrs := dst.Ptrs[:0]
+	keepPtrMap := dst.PtrMap
+	keepInPtrs := dst.InPtrs
+	keepInPtrMap := dst.InPtrMap
 	keepKeep := dst.Keep
 
 	*dst = *src
@@ -69,6 +73,55 @@ func (dst *Request) CopyFrom(src *Request) {
 	dst.Inners = keepInners
 	for i := range src.Inners {
 		dst.Inners[i].CopyFrom(&src.Inners[i])
+	}
+	dst.Ptrs = append(keepPtrs, src.Ptrs...)
+	if dst.Ptrs == nil && src.Ptrs != nil {
+		dst.Ptrs = make([]*int, 0)
+	}
+	dst.PtrMap = keepPtrMap
+	clear(dst.PtrMap)
+	if src.PtrMap != nil {
+		if dst.PtrMap == nil {
+			dst.PtrMap = make(map[string]*int, len(src.PtrMap))
+		}
+		for k, v := range src.PtrMap {
+			dst.PtrMap[k] = v
+		}
+	}
+	dst.InPtrs = keepInPtrs
+	if cap(dst.InPtrs) < len(src.InPtrs) || dst.InPtrs == nil && src.InPtrs != nil {
+		dst.InPtrs = make([]*Inner, len(src.InPtrs))
+	} else {
+		dst.InPtrs = dst.InPtrs[:len(src.InPtrs)]
+	}
+	for i := range src.InPtrs {
+		if src.InPtrs[i] == nil {
+			dst.InPtrs[i] = nil
+		} else {
+			if dst.InPtrs[i] == nil {
+				dst.InPtrs[i] = new(Inner)
+			}
+			dst.InPtrs[i].CopyFrom(src.InPtrs[i])
+		}
+	}
+	dst.InPtrMap = keepInPtrMap
+	clear(dst.InPtrMap)
+	if src.InPtrMap != nil {
+		if dst.InPtrMap == nil {
+			dst.InPtrMap = make(map[string]*Inner, len(src.InPtrMap))
+		}
+		for k, v := range src.InPtrMap {
+			var w *Inner
+			if v == nil {
+				w = nil
+			} else {
+				if w == nil {
+					w = new(Inner)
+				}
+				w.CopyFrom(v)
+			}
+			dst.InPtrMap[k] = w
+		}
 	}
 	dst.Keep = keepKeep
 }
