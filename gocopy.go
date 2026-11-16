@@ -214,7 +214,7 @@ func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, 
 		return d, true, nil
 	}
 
-	code, err := g.copyCode("dst."+name, "src."+name, f.Type(), 0)
+	code, err := g.copyCode("dst."+name, "src."+name, f.Type(), 0, false)
 	if err != nil || code == "" {
 		return d, false, err
 	}
@@ -243,15 +243,16 @@ func (g *generator) deepCode(f *types.Var, tag string) (d deepField, deep bool, 
 
 // plain reports whether a value of type t is copied by assignment.
 func (g *generator) plain(t types.Type) bool {
-	code, _ := g.copyCode("dst", "src", t, 0)
+	code, _ := g.copyCode("dst", "src", t, 0, false)
 
 	return code == ""
 }
 
 // copyCode returns the statements that make dst an independent copy of src,
 // two addressable expressions of type t, reusing the memory dst owns; ""
-// when `dst = src` is one already. depth names the loop variables.
-func (g *generator) copyCode(dst, src string, t types.Type, depth int) (string, error) {
+// when `dst = src` is one already. depth names the loop variables. fresh
+// says dst is known to be zero, so there is nothing of its own to reuse.
+func (g *generator) copyCode(dst, src string, t types.Type, depth int, fresh bool) (string, error) {
 	switch ut := t.Underlying().(type) {
 	case *types.Slice:
 		return g.nested(t, func() (string, error) { return g.sliceCode(dst, src, t, ut, depth) })
@@ -262,7 +263,7 @@ func (g *generator) copyCode(dst, src string, t types.Type, depth int) (string, 
 	case *types.Array:
 		i := loopVar("i", depth)
 
-		code, err := g.copyCode(dst+"["+i+"]", src+"["+i+"]", ut.Elem(), depth+1)
+		code, err := g.copyCode(dst+"["+i+"]", src+"["+i+"]", ut.Elem(), depth+1, fresh)
 		if err != nil || code == "" {
 			return "", err
 		}
@@ -284,6 +285,14 @@ func (g *generator) copyCode(dst, src string, t types.Type, depth int) (string, 
 
 	case *types.Pointer:
 		if _, ok := ut.Elem().Underlying().(*types.Struct); ok && g.hasCopyFrom(ut.Elem()) {
+			if fresh {
+				// a zero dst is nil already and has no object to reuse
+				return fmt.Sprintf(`if %[2]s != nil {
+	%[1]s = new(%[3]s)
+	%[1]s.CopyFrom(%[2]s)
+}`, dst, src, g.typeName(ut.Elem())), nil
+			}
+
 			// dst keeps its own object and copies into it; a nil dst gets a new one
 			return fmt.Sprintf(`if %[2]s == nil {
 	%[1]s = nil
@@ -317,7 +326,7 @@ func (g *generator) nested(t types.Type, code func() (string, error)) (string, e
 func (g *generator) sliceCode(dst, src string, t types.Type, ut *types.Slice, depth int) (string, error) {
 	i := loopVar("i", depth)
 
-	code, err := g.copyCode(dst+"["+i+"]", src+"["+i+"]", ut.Elem(), depth+1)
+	code, err := g.copyCode(dst+"["+i+"]", src+"["+i+"]", ut.Elem(), depth+1, false)
 	if err != nil {
 		return "", err
 	}
@@ -340,7 +349,8 @@ for %[4]s := range %[2]s {
 func (g *generator) mapCode(dst, src string, t types.Type, ut *types.Map, depth int) (string, error) {
 	k, v, w := loopVar("k", depth), loopVar("v", depth), loopVar("w", depth)
 
-	code, err := g.copyCode(w, v, ut.Elem(), depth+1)
+	// w is declared zero just before the copy
+	code, err := g.copyCode(w, v, ut.Elem(), depth+1, true)
 	if err != nil {
 		return "", err
 	}
