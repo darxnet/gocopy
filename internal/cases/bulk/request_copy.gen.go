@@ -112,12 +112,8 @@ func (dst *Request) CopyFrom(src *Request) {
 		}
 		for k, v := range src.InPtrMap {
 			var w *Inner
-			if v == nil {
-				w = nil
-			} else {
-				if w == nil {
-					w = new(Inner)
-				}
+			if v != nil {
+				w = new(Inner)
 				w.CopyFrom(v)
 			}
 			dst.InPtrMap[k] = w
